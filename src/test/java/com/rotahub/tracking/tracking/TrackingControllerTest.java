@@ -2,6 +2,7 @@ package com.rotahub.tracking.tracking;
 
 import com.rotahub.tracking.TestcontainersConfiguration;
 import com.rotahub.tracking.tracking.event.DeliveryCompletedEvent;
+import com.rotahub.tracking.tracking.event.TrackingStatusChangedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
@@ -44,6 +45,7 @@ class TrackingControllerTest {
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private Queue testQueue;
+    private Queue statusChangedQueue;
 
     @BeforeEach
     void setUp() {
@@ -51,6 +53,10 @@ class TrackingControllerTest {
         testQueue = amqpAdmin.declareQueue();
         Binding binding = BindingBuilder.bind(testQueue).to(rotahubEventsExchange).with("delivery.completed");
         amqpAdmin.declareBinding(binding);
+
+        statusChangedQueue = amqpAdmin.declareQueue();
+        Binding statusChangedBinding = BindingBuilder.bind(statusChangedQueue).to(rotahubEventsExchange).with("tracking.status-changed");
+        amqpAdmin.declareBinding(statusChangedBinding);
     }
 
     @Test
@@ -128,6 +134,25 @@ class TrackingControllerTest {
         DeliveryCompletedEvent event = (DeliveryCompletedEvent) payload;
         assertThat(event.orderId()).isEqualTo(orderId);
         assertThat(event.eventType()).isEqualTo("delivery.completed");
+    }
+
+    @Test
+    void publishesTrackingStatusChangedEventForAnyStatus() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        createTracking(orderId);
+
+        HttpResponse<String> response = post("/trackings/" + orderId + "/events",
+            "{\"status\":\"PICKED_UP\",\"timestamp\":\"2026-08-10T18:00:00Z\",\"note\":\"picked up\"}");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+
+        Object payload = rabbitTemplate.receiveAndConvert(statusChangedQueue.getName(), 5000);
+
+        assertThat(payload).isInstanceOf(TrackingStatusChangedEvent.class);
+        TrackingStatusChangedEvent event = (TrackingStatusChangedEvent) payload;
+        assertThat(event.orderId()).isEqualTo(orderId);
+        assertThat(event.status()).isEqualTo(TrackingStatus.PICKED_UP);
+        assertThat(event.eventType()).isEqualTo("tracking.status-changed");
     }
 
     private HttpResponse<String> createTracking(UUID orderId) throws Exception {
